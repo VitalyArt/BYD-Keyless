@@ -39,6 +39,11 @@
     <string name="diagnostics_title">Ulanish diagnostikasi</string>
     <string name="diagnostics_service_on">Fon xizmati ishlamoqda</string>
     <string name="diagnostics_service_off">Fon xizmati to‘xtagan</string>
+    <string name="diagnostics_scan_mode">Bluetooth qidiruvi: %1$s</string>
+    <string name="diagnostics_scan_fast">Tezkor</string>
+    <string name="diagnostics_scan_balanced">Muvozanatli</string>
+    <string name="diagnostics_discovery_age">Avtomobil topilganiga %1$s soniya bo‘ldi</string>
+    <string name="diagnostics_ready_age">Ulanish tayyor bo‘lganiga %1$s soniya bo‘ldi</string>
     <string name="diagnostics_signal_age">Oxirgi signal: %1$s soniya oldin</string>
     <string name="diagnostics_packet_age">Avtomobilning oxirgi javobi: %1$s soniya oldin</string>
     <string name="diagnostics_recoveries">Ulanish tiklanishlari: %1$d</string>

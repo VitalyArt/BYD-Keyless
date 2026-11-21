@@ -93,6 +93,7 @@ enum class CommandError {
 }
 
 enum class BleConnectionState { IDLE, SCANNING, CONNECTING, DISCOVERING, AUTHENTICATING, READY, DISCONNECTED, ERROR }
+enum class BleScanMode { LOW_LATENCY, BALANCED }
 enum class DoorState { UNKNOWN, LOCKED, UNLOCKED }
 
 data class VehicleTelemetry(
@@ -112,6 +113,9 @@ data class BleDiagnostics(
     val lastRecovery: String? = null,
     val recoveries: Int = 0,
     val lastPacketAtMillis: Long? = null,
+    val scanMode: BleScanMode? = null,
+    val lastDiscoveryAtMillis: Long? = null,
+    val lastReadyAtMillis: Long? = null,
 )
 
 sealed interface CommandResult {
@@ -132,7 +136,8 @@ interface WatchAuthRepository {
 interface BleVehicleController {
     val connectionState: StateFlow<BleConnectionState>
     val telemetry: StateFlow<VehicleTelemetry>
-    suspend fun connect(profile: VehicleProfile)
+    val lastError: CommandError? get() = null
+    suspend fun connect(profile: VehicleProfile, prioritizeDiscovery: Boolean = false)
     suspend fun disconnect()
     suspend fun execute(command: VehicleCommand, experimentalEnabled: Boolean = false): CommandResult
 }

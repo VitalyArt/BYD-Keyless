@@ -22,8 +22,11 @@ class ProximityStateMachine {
     private var attempts = 0
     private var retryAt = 0L
 
+    internal fun hasConfiguration(mode: KeylessMode, calibration: ProximityCalibration?, autoUnlock: Boolean, autoLock: Boolean): Boolean =
+        this.mode == mode && this.calibration == calibration && this.autoUnlock == autoUnlock && this.autoLock == autoLock
+
     fun configure(mode: KeylessMode, calibration: ProximityCalibration?, autoUnlock: Boolean, autoLock: Boolean) {
-        if (this.mode != mode || this.calibration != calibration || this.autoUnlock != autoUnlock || this.autoLock != autoLock) resetSignal()
+        if (!hasConfiguration(mode, calibration, autoUnlock, autoLock)) resetSignal()
         this.mode = mode; this.calibration = calibration; this.autoUnlock = autoUnlock; this.autoLock = autoLock
         if (mode == KeylessMode.OFF) {
             unlockedThisApproach = false; wasNear = false; suppressUnlockUntilFar = false

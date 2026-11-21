@@ -15,7 +15,7 @@ class DefaultProximityKeyManagerTest {
         val ack = CompletableDeferred<CommandResult>()
         var calls = 0
         var cancelled = false
-        override suspend fun connect(profile: VehicleProfile) = Unit
+        override suspend fun connect(profile: VehicleProfile, prioritizeDiscovery: Boolean) = Unit
         override suspend fun disconnect() = Unit
         override suspend fun execute(command: VehicleCommand, experimentalEnabled: Boolean): CommandResult {
             calls++
@@ -49,6 +49,26 @@ class DefaultProximityKeyManagerTest {
         manager.onTelemetry(initial.copy(allClosuresClosed = true, closuresAtMillis = 3_100))
         runCurrent()
         assertEquals(0, ble.calls)
+    }
+
+    @Test fun identicalConfigurationPreservesPendingUnlock() = runTest {
+        val ble = Controller()
+        val manager = DefaultProximityKeyManager(ble, { true }, { true }, { testScheduler.currentTime }, backgroundScope)
+        val calibration = ProximityCalibration(-55, -85)
+        manager.configure(KeylessMode.AUTO_UNLOCK_LOCK, calibration, true, false)
+        manager.onTelemetry(VehicleTelemetry(rssi = -50, rssiAtMillis = 0, rssiSequence = 1))
+        advanceTimeBy(3_100)
+        manager.onTelemetry(VehicleTelemetry(rssi = -50, rssiAtMillis = 3_100, rssiSequence = 2))
+        runCurrent()
+        assertEquals(1, ble.calls)
+
+        manager.configure(KeylessMode.AUTO_UNLOCK_LOCK, calibration.copy(), true, false)
+        runCurrent()
+        assertFalse(ble.cancelled)
+        ble.ack.complete(CommandResult.Success)
+        runCurrent()
+        assertFalse(manager.state.value.needsConfirmation)
+        assertFalse(manager.state.value.armed)
     }
 
     @Test fun staleClosuresDoNotPermitAutoLock() = runTest {

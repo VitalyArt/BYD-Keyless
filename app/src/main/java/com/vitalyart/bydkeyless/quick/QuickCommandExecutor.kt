@@ -52,6 +52,8 @@ class QuickCommandExecutor(
     private val commandMutex = Mutex()
     private val _state = MutableStateFlow(QuickCommandState())
     val state: StateFlow<QuickCommandState> = _state.asStateFlow()
+    val isBusy: Boolean
+        get() = _state.value.phase == QuickCommandPhase.CONNECTING || _state.value.phase == QuickCommandPhase.EXECUTING
 
     fun clearTerminalState(expected: QuickCommandState): Boolean {
         if (_state.value == expected && expected.phase in setOf(QuickCommandPhase.SUCCESS, QuickCommandPhase.ERROR)) {
@@ -75,13 +77,15 @@ class QuickCommandExecutor(
             }
             preflight()?.let { return fail(command, it) }
 
-            if (controller.connectionState.value != BleConnectionState.READY) {
-                _state.value = QuickCommandState(QuickCommandPhase.CONNECTING, command)
-                controller.connect(profile)
-                val terminal = withTimeoutOrNull(connectionTimeoutMillis) {
-                    controller.connectionState.first { it == BleConnectionState.READY || it == BleConnectionState.ERROR }
-                }
-                if (terminal != BleConnectionState.READY) return fail(command, CommandError.CONNECTION_TIMEOUT)
+            val terminal = withTimeoutOrNull(connectionTimeoutMillis) {
+                val connecting = QuickCommandState(QuickCommandPhase.CONNECTING, command)
+                if (controller.connectionState.value != BleConnectionState.READY) _state.value = connecting
+                controller.connect(profile, prioritizeDiscovery = true)
+                if (controller.connectionState.value != BleConnectionState.READY) _state.value = connecting
+                controller.connectionState.first { it == BleConnectionState.READY || it == BleConnectionState.ERROR }
+            }
+            if (terminal != BleConnectionState.READY) {
+                return fail(command, controller.lastError ?: CommandError.CONNECTION_TIMEOUT)
             }
 
             _state.value = QuickCommandState(QuickCommandPhase.EXECUTING, command)
@@ -93,6 +97,7 @@ class QuickCommandExecutor(
             }
             return result
         } finally {
+            if (isBusy) _state.value = QuickCommandState()
             commandMutex.unlock()
         }
     }

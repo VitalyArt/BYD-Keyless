@@ -33,11 +33,15 @@ class KeylessApplication : Application() {
         )
         val native = BydNativeFacade()
         val ble = AndroidBleVehicleController(this, native)
-        val proximity = DefaultProximityKeyManager(ble, canUnlock = { store.manualUnlockVerified }, canLock = { store.manualLockVerified })
         val quickCommands = QuickCommandExecutor(
             sessionProvider = store::loadSession,
             controller = ble,
             preflight = AndroidQuickCommandPreflight(this),
+        )
+        val proximity = DefaultProximityKeyManager(
+            ble,
+            canUnlock = { store.manualUnlockVerified && !quickCommands.isBusy },
+            canLock = { store.manualLockVerified && !quickCommands.isBusy },
         )
         val updateManager = AppUpdateManager(this, store, applicationScope)
         graph = AppGraph(

@@ -23,6 +23,7 @@ class DefaultProximityKeyManager(
     private var lastDoorStateAt: Long? = null
 
     override fun configure(mode: KeylessMode, calibration: ProximityCalibration?, autoUnlock: Boolean, autoLock: Boolean) {
+        if (machine.hasConfiguration(mode, calibration, autoUnlock, autoLock)) return
         configurationVersion += 1
         if (commandJob?.isActive == true) machine.commandFailed(clock(), uncertain = true)
         commandJob?.cancel()
