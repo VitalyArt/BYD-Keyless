@@ -65,7 +65,7 @@ class KeylessService : Service() {
         if (quickCommand == null && (session == null || !session.second.hasValidKey() || graph.store.keylessMode == KeylessMode.OFF)) {
             stopKey(); return START_NOT_STICKY
         }
-        if (!monitoring && session != null) beginMonitoring(session.second)
+        if (!monitoring && session?.second?.hasValidKey() == true) beginMonitoring(session.second)
         if (quickCommand != null) executeQuickCommand(quickCommand)
         return START_STICKY
     }
@@ -112,7 +112,7 @@ class KeylessService : Service() {
                 delay(5_000L)
                 val cleared = graph.quickCommands.clearTerminalState(terminal)
                 refreshSurfaces()
-                if (cleared && graph.store.keylessMode == KeylessMode.OFF) stopKey()
+                if (cleared && (!monitoring || graph.store.keylessMode == KeylessMode.OFF)) stopKey()
             }
         }
     }
@@ -151,9 +151,11 @@ class KeylessService : Service() {
         val state = graph.ble.connectionState.value
         val quick = graph.quickCommands.state.value.phase
         if (state != previousConnectionState || quick != previousQuickPhase) {
-            if (state in setOf(BleConnectionState.CONNECTING, BleConnectionState.DISCOVERING, BleConnectionState.AUTHENTICATING) || quick == QuickCommandPhase.EXECUTING) {
+            val settingUpConnection = state in setOf(BleConnectionState.CONNECTING, BleConnectionState.DISCOVERING, BleConnectionState.AUTHENTICATING)
+            val handlingQuickCommand = quick == QuickCommandPhase.CONNECTING || quick == QuickCommandPhase.EXECUTING
+            if (settingUpConnection || handlingQuickCommand) {
                 wakeLock?.acquire(35_000L)
-            } else if (state != BleConnectionState.READY) {
+            } else {
                 wakeLock?.takeIf { it.isHeld }?.release()
             }
             previousConnectionState = state

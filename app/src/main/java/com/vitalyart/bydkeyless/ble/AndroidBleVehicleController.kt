@@ -60,7 +60,7 @@ class AndroidBleVehicleController(
     private var scanTransitionJob: Job? = null
     private var connectionDeadlineJob: Job? = null
     private var adapterReceiverRegistered = false
-    var lastError: CommandError? = null
+    override var lastError: CommandError? = null
         private set(value) {
             field = value
             _diagnostics.value = _diagnostics.value.copy(error = value)
@@ -85,15 +85,17 @@ class AndroidBleVehicleController(
     }
 
     private var scanCallback: ScanCallback? = null
-    private var scanEconomyJob: Job? = null
+    private var scanBalanceJob: Job? = null
 
     private fun newScanCallback(session: Long) = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             if (session != generation || scanCallback !== this || _state.value != BleConnectionState.SCANNING) return
             val target = profile?.macAddress ?: return
             if (!runCatching { result.device.address.equals(target, true) }.getOrDefault(false) || scanTransitionJob?.isActive == true) return
+            _diagnostics.value = _diagnostics.value.copy(lastDiscoveryAtMillis = clock(), lastReadyAtMillis = null)
+            Log.i(TAG, "Vehicle advertisement matched BLE scan")
             stopScan()
-            scanEconomyJob?.cancel()
+            scanBalanceJob?.cancel()
             scanTransitionJob = scope.launch {
                 delay(SCAN_TO_CONNECT_DELAY_MS)
                 if (generation == session && _state.value == BleConnectionState.SCANNING && !manualDisconnect) {
@@ -109,11 +111,31 @@ class AndroidBleVehicleController(
         }
     }
 
-    override suspend fun connect(profile: VehicleProfile) = withContext(Dispatchers.Main.immediate) {
-        if (this@AndroidBleVehicleController.profile == profile && _state.value in ACTIVE_CONNECTION_STATES) return@withContext
-        disconnect()
-        manualDisconnect = false
+    override suspend fun connect(profile: VehicleProfile, prioritizeDiscovery: Boolean) = withContext(Dispatchers.Main.immediate) {
+        val reuse = !manualDisconnect && ConnectionHealthPolicy.hasSameCredentials(this@AndroidBleVehicleController.profile, profile) &&
+            profile.hasValidKey()
+        if (!reuse) {
+            disconnect()
+            manualDisconnect = false
+        }
         this@AndroidBleVehicleController.profile = profile
+        if (reuse && _state.value in ACTIVE_CONNECTION_STATES) {
+            if (prioritizeDiscovery && _state.value == BleConnectionState.SCANNING) {
+                when (_diagnostics.value.scanMode) {
+                    BleScanMode.BALANCED -> {
+                        stopScan()
+                        startScan()
+                    }
+                    BleScanMode.LOW_LATENCY -> scanCallback?.let(::scheduleBalancedScan)
+                    null -> Unit // The advertisement matched and GATT setup is about to start.
+                }
+            }
+            return@withContext
+        }
+        if (reuse && reconnectJob?.isActive == true) {
+            if (!prioritizeDiscovery) return@withContext
+            reconnectJob?.cancel()
+        }
         if (!adapterReceiverRegistered) {
             ContextCompat.registerReceiver(context, adapterReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED)
             adapterReceiverRegistered = true
@@ -198,11 +220,14 @@ class AndroidBleVehicleController(
     private fun stopScan() {
         val active = scanCallback ?: return
         scanCallback = null
+        _diagnostics.value = _diagnostics.value.copy(scanMode = null)
         runCatching { adapter?.bluetoothLeScanner?.stopScan(active) }
     }
 
-    private fun startScan(economy: Boolean = false) {
-        if (manualDisconnect || _state.value in ACTIVE_CONNECTION_STATES) return
+    private fun startScan(mode: BleScanMode = BleScanMode.LOW_LATENCY) {
+        if (manualDisconnect || scanCallback != null || scanTransitionJob?.isActive == true ||
+            (_state.value in ACTIVE_CONNECTION_STATES && _state.value != BleConnectionState.SCANNING)
+        ) return
         lastError = when {
             profile?.hasValidKey() != true -> CommandError.KEY_EXPIRED
             !native.loaded -> CommandError.NATIVE_UNAVAILABLE
@@ -223,27 +248,35 @@ class AndroidBleVehicleController(
         _state.value = BleConnectionState.SCANNING
         try {
             val callback = newScanCallback(generation).also { scanCallback = it }
+            val scanMode = when (mode) {
+                BleScanMode.LOW_LATENCY -> ScanSettings.SCAN_MODE_LOW_LATENCY
+                BleScanMode.BALANCED -> ScanSettings.SCAN_MODE_BALANCED
+            }
             scanner.startScan(
                 listOf(ScanFilter.Builder().setDeviceAddress(requireNotNull(profile?.macAddress).uppercase()).build()),
-                ScanSettings.Builder().setScanMode(if (economy) ScanSettings.SCAN_MODE_LOW_POWER else ScanSettings.SCAN_MODE_LOW_LATENCY).build(),
+                ScanSettings.Builder().setScanMode(scanMode).build(),
                 callback,
             )
-            if (!economy) {
-                scanEconomyJob?.cancel()
-                scanEconomyJob = scope.launch {
-                    delay(30_000L)
-                    if (_state.value == BleConnectionState.SCANNING && scanCallback === callback) {
-                        stopScan()
-                        _state.value = BleConnectionState.DISCONNECTED
-                        startScan(economy = true)
-                    }
-                }
-            }
+            _diagnostics.value = _diagnostics.value.copy(scanMode = mode)
+            Log.i(TAG, "Started filtered BLE scan mode=$mode")
+            if (mode == BleScanMode.LOW_LATENCY) scheduleBalancedScan(callback)
         } catch (error: SecurityException) {
+            stopScan()
             lastError = CommandError.PERMISSION_DENIED
             _state.value = BleConnectionState.ERROR
         } catch (error: IllegalStateException) {
             recoverConnection("scanner unavailable")
+        }
+    }
+
+    private fun scheduleBalancedScan(callback: ScanCallback) {
+        scanBalanceJob?.cancel()
+        scanBalanceJob = scope.launch {
+            delay(FAST_SCAN_DURATION_MS)
+            if (_state.value == BleConnectionState.SCANNING && scanCallback === callback) {
+                stopScan()
+                startScan(BleScanMode.BALANCED)
+            }
         }
     }
 
@@ -300,8 +333,7 @@ class AndroidBleVehicleController(
         authenticationTimeoutJob = scope.launch {
             delay(AUTHENTICATION_TIMEOUT_MS)
             if (_state.value == BleConnectionState.AUTHENTICATING) {
-                closeGatt()
-                scheduleReconnect()
+                recoverConnection("authentication deadline exceeded")
             }
         }
         val frame = runCatching { native.randomExchangeFrame(p.keyNumber) }.getOrNull()
@@ -346,6 +378,7 @@ class AndroidBleVehicleController(
                     authenticationTimeoutJob?.cancel()
                     authenticationStage = AuthenticationStage.NONE
                     connectionDeadlineJob?.cancel()
+                    _diagnostics.value = _diagnostics.value.copy(lastReadyAtMillis = clock())
                     _state.value = BleConnectionState.READY
                     reconnectAttempt = 0
                     markBleActivity()
@@ -382,14 +415,13 @@ class AndroidBleVehicleController(
     private fun failAuthentication() {
         authenticationTimeoutJob?.cancel()
         authenticationStage = AuthenticationStage.NONE
-        closeGatt()
-        if (manualDisconnect) _state.value = BleConnectionState.ERROR else scheduleReconnect()
+        recoverConnection("authentication failed")
     }
 
     private fun closeGatt() {
         generation += 1
         scanTransitionJob?.cancel()
-        scanEconomyJob?.cancel()
+        scanBalanceJob?.cancel()
         connectionDeadlineJob?.cancel()
         authenticationTimeoutJob?.cancel()
         authenticationStage = AuthenticationStage.NONE
@@ -512,6 +544,7 @@ class AndroidBleVehicleController(
     private companion object {
         const val TAG = "BydBleController"
         const val SCAN_TO_CONNECT_DELAY_MS = 500L
+        const val FAST_SCAN_DURATION_MS = 30_000L
         // Measured on the current official BYD AUTO client on the target phone:
         // connection callback -> discovery ~= 303 ms, CCCD completion -> first
         // random frame ~= 308 ms. These windows are part of the BLE3 handshake.

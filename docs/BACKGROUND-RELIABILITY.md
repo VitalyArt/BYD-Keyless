@@ -5,7 +5,7 @@ Implemented after the 2026-09-05 audit. Automated verification covers Kotlin beh
 ## Connection and commands
 
 - A system MAC ScanFilter replaces the unfiltered scan. Missing/invalid MAC is reported as key-not-ready instead of connecting to arbitrary nearby devices. A usable stable vehicle MAC is required.
-- Scanning starts in LOW_LATENCY and switches to LOW_POWER after 30 seconds without a match. Bluetooth off/on resumes monitoring. Nordic connection events trigger recovery immediately; setup has a 35-second overall deadline.
+- Scanning starts in LOW_LATENCY and switches to BALANCED after 30 seconds without a match. A quick action can prioritize discovery and wait up to 20 seconds for an authenticated connection. Bluetooth off/on resumes monitoring. Nordic connection events trigger recovery immediately; setup has a 35-second overall deadline.
 - Each connection owns its Nordic manager and generation; callbacks from retired managers/scanners are ignored. The unused raw-GATT transport has been removed.
 - All BLE commands share a non-queueing mutex. A concurrent command receives COMMAND_BUSY rather than executing later with stale intent. Cancellation or timeout invalidates the connection before another command may run, and pending ACK state is cleared in finally.
 - Auto commands execute independently from telemetry collection. RSSI updates cannot cancel the pending command.
@@ -28,7 +28,7 @@ Implemented after the 2026-09-05 audit. Automated verification covers Kotlin beh
 - Passive Entry was removed; connected signal sampling uses a 1-second interval. At most one RSSI read is queued. The watchdog allows a fresh read after CPU sleep before declaring the link stale.
 - Widget rendering skips unchanged state.
 - Calibration captures 8 distinct fresh samples from one connection, accepts at most 12 dB spread, and uses the median. The wizard records opening and closing thresholds directly. Legacy metre settings migrate to their effective thresholds without rounding. The UI shows zones rather than a physical distance.
-- Settings include service state, BLE state/error, age of signal and vehicle responses, recovery count and last transport recovery reason. This diagnostic snapshot is in memory; no credentials or protocol payloads are stored.
+- Settings include service state, BLE state/error, scan mode, time since discovery and authentication, age of signal and vehicle responses, recovery count and last transport recovery reason. This diagnostic snapshot is in memory; no credentials or protocol payloads are stored.
 - Public launcher shortcuts require a confirmation dialog. Notification/widget PendingIntents retain their existing one-tap behavior.
 
 ## Physical acceptance checks

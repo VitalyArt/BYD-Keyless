@@ -637,10 +637,18 @@ private fun BackgroundDiagnostics(state: MainUiState) {
         Text(stringResource(if (state.serviceRunning) R.string.diagnostics_service_on else R.string.diagnostics_service_off))
         Text(stringResource(connectionStatus(state.bleState)), color = TextSecondary)
         state.bleError?.let { Text(stringResource(it.messageResource()), color = Critical) }
-        val rssiAge = state.telemetry.rssiAtMillis?.let { ((now - it).coerceAtLeast(0) / 1_000).toString() } ?: "—"
-        val packetAge = state.diagnostics.lastPacketAtMillis?.let { ((now - it).coerceAtLeast(0) / 1_000).toString() } ?: "—"
-        Text(stringResource(R.string.diagnostics_signal_age, rssiAge), color = TextSecondary)
-        Text(stringResource(R.string.diagnostics_packet_age, packetAge), color = TextSecondary)
+        fun age(timestamp: Long?): String = timestamp?.let { ((now - it).coerceAtLeast(0) / 1_000).toString() } ?: "—"
+        state.diagnostics.scanMode?.let { mode ->
+            val label = stringResource(when (mode) {
+                BleScanMode.LOW_LATENCY -> R.string.diagnostics_scan_fast
+                BleScanMode.BALANCED -> R.string.diagnostics_scan_balanced
+            })
+            Text(stringResource(R.string.diagnostics_scan_mode, label), color = TextSecondary)
+        }
+        Text(stringResource(R.string.diagnostics_discovery_age, age(state.diagnostics.lastDiscoveryAtMillis)), color = TextSecondary)
+        Text(stringResource(R.string.diagnostics_ready_age, age(state.diagnostics.lastReadyAtMillis)), color = TextSecondary)
+        Text(stringResource(R.string.diagnostics_signal_age, age(state.telemetry.rssiAtMillis)), color = TextSecondary)
+        Text(stringResource(R.string.diagnostics_packet_age, age(state.diagnostics.lastPacketAtMillis)), color = TextSecondary)
         Text(stringResource(R.string.diagnostics_recoveries, state.diagnostics.recoveries), color = TextSecondary)
         state.diagnostics.lastRecovery?.let { Text(it, color = TextSecondary, fontSize = 12.sp) }
     }

@@ -2,13 +2,16 @@ package com.vitalyart.bydkeyless.quick
 
 import com.vitalyart.bydkeyless.model.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class QuickCommandExecutorTest {
     private val profile = VehicleProfile(
         vin = "TESTVIN",
@@ -39,6 +42,7 @@ class QuickCommandExecutorTest {
 
         assertEquals(CommandResult.Success, executor.execute(VehicleCommand.UNLOCK))
         assertEquals(1, controller.connectCount)
+        assertTrue(controller.prioritizedDiscovery)
         assertEquals(listOf(VehicleCommand.UNLOCK), controller.executed)
         assertEquals(QuickCommandPhase.SUCCESS, executor.state.value.phase)
     }
@@ -48,6 +52,54 @@ class QuickCommandExecutorTest {
         val executor = executor(controller, timeout = 100)
 
         assertEquals(CommandResult.Rejected(CommandError.CONNECTION_TIMEOUT), executor.execute(VehicleCommand.LOCK))
+        assertEquals(100L, testScheduler.currentTime)
+        assertTrue(controller.executed.isEmpty())
+    }
+
+    @Test fun firstTapWaitsThroughReconnectAndIgnoresRepeatedTap() = runTest {
+        val controller = FakeController(connects = false)
+        controller.connectionState.value = BleConnectionState.SCANNING
+        val executor = executor(controller)
+        val firstTap = async { executor.execute(VehicleCommand.UNLOCK) }
+        runCurrent()
+        assertTrue(controller.prioritizedDiscovery)
+        assertEquals(QuickCommandPhase.CONNECTING, executor.state.value.phase)
+        assertEquals(CommandResult.Rejected(CommandError.COMMAND_BUSY), executor.execute(VehicleCommand.UNLOCK))
+
+        controller.connectionState.value = BleConnectionState.AUTHENTICATING
+        runCurrent()
+        controller.connectionState.value = BleConnectionState.DISCONNECTED
+        advanceTimeBy(300)
+        assertTrue(controller.executed.isEmpty())
+
+        controller.connectionState.value = BleConnectionState.READY
+        assertEquals(CommandResult.Success, firstTap.await())
+        assertEquals(1, controller.connectCount)
+        assertEquals(listOf(VehicleCommand.UNLOCK), controller.executed)
+    }
+
+    @Test fun firstTapWaitsForInProgressAuthentication() = runTest {
+        val controller = FakeController(connects = false)
+        controller.connectionState.value = BleConnectionState.AUTHENTICATING
+        val executor = executor(controller)
+        val firstTap = async { executor.execute(VehicleCommand.UNLOCK) }
+        runCurrent()
+        assertTrue(controller.executed.isEmpty())
+        assertEquals(BleConnectionState.AUTHENTICATING, controller.connectionState.value)
+        controller.connectionState.value = BleConnectionState.READY
+        assertEquals(CommandResult.Success, firstTap.await())
+        assertEquals(listOf(VehicleCommand.UNLOCK), controller.executed)
+    }
+
+    @Test fun terminalConnectionErrorIsReportedWithoutSendingCommand() = runTest {
+        val controller = FakeController(connects = false)
+        val executor = executor(controller)
+        val firstTap = async { executor.execute(VehicleCommand.UNLOCK) }
+        runCurrent()
+        controller.lastError = CommandError.BLUETOOTH_OFF
+        controller.connectionState.value = BleConnectionState.ERROR
+        assertEquals(CommandResult.Rejected(CommandError.BLUETOOTH_OFF), firstTap.await())
+        assertEquals(0L, testScheduler.currentTime)
         assertTrue(controller.executed.isEmpty())
     }
 
@@ -67,6 +119,16 @@ class QuickCommandExecutorTest {
         assertEquals(CommandResult.Success, first.await())
     }
 
+    @Test fun unknownCommandOutcomeIsNotResent() = runTest {
+        val failure = CommandResult.Failure(CommandError.VEHICLE_TIMEOUT)
+        val controller = FakeController(connects = true, commandResult = failure)
+        val executor = executor(controller)
+
+        assertEquals(failure, executor.execute(VehicleCommand.UNLOCK))
+        assertEquals(listOf(VehicleCommand.UNLOCK), controller.executed)
+        assertEquals(QuickCommandPhase.ERROR, executor.state.value.phase)
+    }
+
     @Test fun rejectsMissingCapabilityBeforeConnecting() = runTest {
         val controller = FakeController(connects = true)
         val limited = profile.copy(capabilities = setOf("1005"))
@@ -81,25 +143,29 @@ class QuickCommandExecutorTest {
 
     private class FakeController(
         private val connects: Boolean,
+        private val commandResult: CommandResult = CommandResult.Success,
         private val executeBlock: suspend () -> Unit = {},
     ) : BleVehicleController {
-        private val mutableState = MutableStateFlow(BleConnectionState.IDLE)
-        override val connectionState: StateFlow<BleConnectionState> = mutableState
-        override val telemetry: StateFlow<VehicleTelemetry> = MutableStateFlow(VehicleTelemetry())
+        override val connectionState = MutableStateFlow(BleConnectionState.IDLE)
+        override val telemetry = MutableStateFlow(VehicleTelemetry())
+        override var lastError: CommandError? = null
         var connectCount = 0
+        var prioritizedDiscovery = false
         val executed = mutableListOf<VehicleCommand>()
 
-        override suspend fun connect(profile: VehicleProfile) {
+        override suspend fun connect(profile: VehicleProfile, prioritizeDiscovery: Boolean) {
             connectCount++
-            mutableState.value = if (connects) BleConnectionState.READY else BleConnectionState.CONNECTING
+            prioritizedDiscovery = prioritizeDiscovery
+            if (connects) connectionState.value = BleConnectionState.READY
+            else if (connectionState.value == BleConnectionState.IDLE) connectionState.value = BleConnectionState.CONNECTING
         }
 
-        override suspend fun disconnect() { mutableState.value = BleConnectionState.IDLE }
+        override suspend fun disconnect() { connectionState.value = BleConnectionState.IDLE }
 
         override suspend fun execute(command: VehicleCommand, experimentalEnabled: Boolean): CommandResult {
             executed += command
             executeBlock()
-            return CommandResult.Success
+            return commandResult
         }
     }
 }

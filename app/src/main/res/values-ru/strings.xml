@@ -39,6 +39,11 @@
     <string name="diagnostics_title">Диагностика соединения</string>
     <string name="diagnostics_service_on">Фоновый сервис работает</string>
     <string name="diagnostics_service_off">Фоновый сервис остановлен</string>
+    <string name="diagnostics_scan_mode">Поиск Bluetooth: %1$s</string>
+    <string name="diagnostics_scan_fast">Быстрый</string>
+    <string name="diagnostics_scan_balanced">Сбалансированный</string>
+    <string name="diagnostics_discovery_age">Машина обнаружена: %1$s с назад</string>
+    <string name="diagnostics_ready_age">Соединение готово: %1$s с назад</string>
     <string name="diagnostics_signal_age">Последний сигнал: %1$s с назад</string>
     <string name="diagnostics_packet_age">Последний ответ автомобиля: %1$s с назад</string>
     <string name="diagnostics_recoveries">Восстановлений соединения: %1$d</string>
